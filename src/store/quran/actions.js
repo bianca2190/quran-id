@@ -5,10 +5,11 @@ export async function fetchSurah(context, surahId) {
   context.commit("showLoading", "fetchSurah");
 
   const chapter = surahList.find(item => item.id == surahId);
+  const tajweedMode = context.state.tajweedMode;
 
   const urls = [
     {
-      url: "quran/verses/uthmani_tajweed",
+      url: "quran/verses/uthmani" + (tajweedMode ? "_tajweed" : ""),
       params: {
         chapter_number: surahId
       }
@@ -44,9 +45,25 @@ export async function fetchSurah(context, surahId) {
   return Promise.all(requests)
     .then(values => {
       const arabics = values[0].verses.map(verse => {
+        let text_uthmani;
+
+        /**
+         * Special cases for tajweed
+         * - Remove verse number (end) & fix spacing
+         * - Fix some madda_normal weird character
+         */
+        if (tajweedMode) {
+          text_uthmani = verse.text_uthmani_tajweed
+            .replace(/<span.*?>.*?<\/span>/gi, "")
+            .replace("ٲ", String.fromCharCode(1648))
+            .trim();
+        } else {
+          text_uthmani = verse.text_uthmani.trim();
+        }
+
         return {
           ...verse,
-          text_uthmani: verse.text_uthmani_tajweed,
+          text_uthmani,
           verse_number: parseInt(verse.verse_key.split(":")[1])
         };
       });
@@ -58,6 +75,60 @@ export async function fetchSurah(context, surahId) {
     .catch(err => {
       console.log(err);
       context.commit("hideLoading", "fetchSurah");
+    });
+}
+
+export async function fetchSurahWBW(context, surahId) {
+  context.commit("showLoading", "fetchSurahWBW");
+
+  const chapter = surahList.find(item => item.id == surahId);
+
+  // We can only fetch 50 ayah per request
+  const perPage = 50;
+  const requestCount = Math.ceil(chapter.versesCount / perPage);
+  const urls = [];
+  for (let page = 1; page <= requestCount; page++) {
+    urls.push({
+      url: "verses/by_chapter/" + surahId,
+      params: {
+        language: "id",
+        words: true,
+        word_fields: "text_uthmani",
+        page: page,
+        per_page: perPage
+      }
+    });
+  }
+
+  const requests = [];
+  urls.forEach(url => {
+    requests.push(
+      new Promise((resolve, reject) => {
+        this.$httpQuran({
+          url: url.url,
+          params: url.params
+        })
+          .then(res => {
+            resolve(res.data);
+          })
+          .catch(err => {
+            console.log(err);
+            reject(err);
+          });
+      })
+    );
+  });
+
+  return Promise.all(requests)
+    .then(values => {
+      const verses = values.reduce((acc, res) => acc.concat(res.verses), []);
+      const merged = Object.assign({ ayahs: verses }, chapter);
+      context.commit("updateSurahWBW", merged);
+      context.commit("hideLoading", "fetchSurahWBW");
+    })
+    .catch(err => {
+      console.log(err);
+      context.commit("hideLoading", "fetchSurahWBW");
     });
 }
 
